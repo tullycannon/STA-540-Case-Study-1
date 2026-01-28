@@ -1,0 +1,604 @@
+---
+title: "Case Study 1: HIV Self-Testing Promotion Replication"
+author: "Tully Cannon"
+date: today
+format: pdf
+echo: FALSE
+---
+
+# Study Objectives
+
+The purpose of this study is to see which internet medium, between dating apps, search engines, and social media platforms, is most effective and cost efficient in increasing HIV testing among people that are at high risk (in this case minority men who have sex with men). One platform from each medium will have advertisements run on it at a given time, with the study comprising of two waves. The primary outcome will be the number of kits ordered per day, compared between each platform within each wave of advertisements. The secondary outcome will be evaluating the correlations between different attitudes towards HIV testing, medical mistrust, substance use, and general HIV related stigma and the probability that an individual orders a test.
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(knitr)
+library(emmeans)
+library(broom)
+
+data <- read_csv("/Users/tullycannon/Downloads/CTN_FINAL.csv")
+
+data_clean <- data %>%
+  filter(PO_FLAG == "Include", WAVE != 3) |>
+  mutate(ordered = ifelse(ORA_WITHIN60_YESNO == "Yes", 1, 0))
+
+cat("Sample size:", nrow(data_clean), "\n")
+```
+
+# Table 1: Participant Characteristics
+
+```{r table1, warning=FALSE}
+# Age - Q3_1
+age_stats <- data_clean %>%
+  summarise(
+    median = median(Q3_1, na.rm = TRUE),
+    q1 = quantile(Q3_1, 0.25, na.rm = TRUE),
+    q3 = quantile(Q3_1, 0.75, na.rm = TRUE)
+  )
+
+# Ethnicity - Q5_1 (1 = Yes Hispanic/Latinx, 2 = No)
+ethnicity_stats <- data_clean %>%
+  summarise(
+    n = sum(Q5_1 == 1, na.rm = TRUE),
+    pct = round(mean(Q5_1 == 1, na.rm = TRUE) * 100)
+  )
+
+# Race - Q5_3 (25=Am Indian, 24=Black, 23=White, 28=Other)
+race_stats <- data_clean %>%
+  filter(!is.na(Q5_3)) %>%
+  summarise(
+    native_n = sum(Q5_3 == "25", na.rm = TRUE),
+    black_n = sum(Q5_3 == "24", na.rm = TRUE),
+    white_n = sum(Q5_3 == "23", na.rm = TRUE),
+    other_n = sum(Q5_3 == "28", na.rm = TRUE),
+    multiracial_n = sum(str_detect(Q5_3, ",") | nchar(Q5_3) > 2, na.rm = TRUE),
+    total = n()
+  ) %>%
+  mutate(
+    native_pct = round(native_n / 254 * 100, 1),
+    black_pct = round(black_n / 254 * 100, 1),
+    white_pct = round(white_n / 254 * 100, 1),
+    other_pct = round(other_n / 254 * 100, 1),
+    multiracial_pct = round(multiracial_n / 254 * 100, 1)
+  )
+
+# PrEP history - Q6_2 (1=Past 6 months, 2=Currently taking, 3=Never)
+prep_stats <- data_clean %>%
+  filter(!is.na(Q6_2)) %>%
+  count(Q6_2) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+prep_never <- prep_stats %>% filter(Q6_2 == 3)
+prep_past6m <- prep_stats %>% filter(Q6_2 == 1)
+
+# Number of sex partners - Q11_2
+partners_stats <- data_clean %>%
+  summarise(
+    median = median(Q11_2, na.rm = TRUE),
+    q1 = quantile(Q11_2, 0.25, na.rm = TRUE),
+    q3 = quantile(Q11_2, 0.75, na.rm = TRUE)
+  )
+
+# Condom use - Q11_3
+condom_stats <- data_clean %>%
+  filter(!is.na(Q11_3)) %>%
+  count(Q11_3) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  arrange(Q11_3)
+
+# Condomless receptive anal sex - Q11_4 (1 = Yes)
+condomless_stats <- data_clean %>%
+  summarise(
+    n = sum(Q11_4 == 1, na.rm = TRUE),
+    pct = round(mean(Q11_4 == 1, na.rm = TRUE) * 100, 1)
+  )
+
+# Ever tested - Q11_5 (1 = Yes, 2 = No)
+tested_stats <- data_clean %>%
+  summarise(
+    ever_tested_n = sum(Q11_5 == 1, na.rm = TRUE),
+    ever_tested_pct = round(mean(Q11_5 == 1, na.rm = TRUE) * 100, 1),
+    never_tested_n = sum(Q11_5 == 2, na.rm = TRUE),
+    never_tested_pct = round(mean(Q11_5 == 2, na.rm = TRUE) * 100, 1)
+  )
+
+# Time since last test - LAST_HIV_TEST_MONTHS
+test_time_stats <- data_clean %>%
+  filter(Q11_5 == 1) %>%
+  summarise(
+    median = median(LAST_HIV_TEST_MONTHS, na.rm = TRUE),
+    q1 = quantile(LAST_HIV_TEST_MONTHS, 0.25, na.rm = TRUE),
+    q3 = quantile(LAST_HIV_TEST_MONTHS, 0.75, na.rm = TRUE)
+  )
+
+# Reasons for not testing - Q11_7
+reasons_stats <- data_clean %>%
+  filter(Q11_5 == 2, !is.na(Q11_7)) %>%
+  count(Q11_7) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  arrange(Q11_7)
+
+# Helper function to safely get value
+get_value <- function(df, condition, col, default = 0) {
+  result <- df %>% filter({{condition}}) %>% pull({{col}})
+  if (length(result) == 0) return(default)
+  return(result[1])
+}
+
+# Create Table 1
+table1 <- tibble(
+  Characteristic = c(
+    "Age in years, median (IQR)",
+    "**Ethnicity, n (%)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Hispanic/Latinx",
+    "**Race, n (%)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;American Indian or Alaskan Native",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Black or African American",
+    "&nbsp;&nbsp;&nbsp;&nbsp;White",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Other",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Multiracial",
+    "**History of PrEP uptake, n (%)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Never taken PrEP",
+    "&nbsp;&nbsp;&nbsp;&nbsp;In the past 6 months",
+    "Number of male sex partners in the past 90 days, median (IQR)",
+    "**Condom use, n (%)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Never",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Sometimes",
+    "&nbsp;&nbsp;&nbsp;&nbsp;About half the time",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Most of the time",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Always",
+    "Condomless receptive anal sex in the past 90 days, n (%)",
+    "Ever tested for HIV during lifetime, n (%)",
+    "**If tested for HIV, median (IQR)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Months since last HIV test",
+    "If not tested for HIV, n (%)",
+    "**Main reasons cited by the 63 participants for not getting tested, n (%)**",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Unlikely to be exposed to HIV",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Afraid of testing HIV-positive",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Did not want to think about HIV/HIV-positive",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Worried about names being reported if positive",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Dislike for needles",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Unable to trust that the results will be confidential",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Unaware of where to get tested",
+    "&nbsp;&nbsp;&nbsp;&nbsp;Other reasons"
+  ),
+  Value = c(
+    sprintf("%d (%d-%d)", age_stats$median, age_stats$q1, age_stats$q3),
+    "",
+    sprintf("%d (%g)", ethnicity_stats$n, ethnicity_stats$pct),
+    "",
+    sprintf("%d (%g)", race_stats$native_n, race_stats$native_pct),
+    sprintf("%d (%g)", race_stats$black_n, race_stats$black_pct),
+    sprintf("%d (%g)", race_stats$white_n, race_stats$white_pct),
+    sprintf("%d (%g)", race_stats$other_n, race_stats$other_pct),
+    sprintf("%d (%g)", race_stats$multiracial_n, race_stats$multiracial_pct),
+    "",
+    sprintf("%d (%g)", get_value(prep_never, TRUE, n), get_value(prep_never, TRUE, pct)),
+    sprintf("%d (%g)", get_value(prep_past6m, TRUE, n), get_value(prep_past6m, TRUE, pct)),
+    sprintf("%d (%d-%d)", partners_stats$median, partners_stats$q1, partners_stats$q3),
+    "",
+    sprintf("%d (%g)", get_value(condom_stats, Q11_3 == 1, n), get_value(condom_stats, Q11_3 == 1, pct)),
+    sprintf("%d (%g)", get_value(condom_stats, Q11_3 == 2, n), get_value(condom_stats, Q11_3 == 2, pct)),
+    sprintf("%d (%g)", get_value(condom_stats, Q11_3 == 3, n), get_value(condom_stats, Q11_3 == 3, pct)),
+    sprintf("%d (%g)", get_value(condom_stats, Q11_3 == 4, n), get_value(condom_stats, Q11_3 == 4, pct)),
+    sprintf("%d (%g)", get_value(condom_stats, Q11_3 == 5, n), get_value(condom_stats, Q11_3 == 5, pct)),
+    sprintf("%d (%g)", condomless_stats$n, condomless_stats$pct),
+    sprintf("%d (%g)", tested_stats$ever_tested_n, tested_stats$ever_tested_pct),
+    "",
+    sprintf("%d (%d-%d)", round(test_time_stats$median), round(test_time_stats$q1), round(test_time_stats$q3)),
+    sprintf("%d (%g%%)", tested_stats$never_tested_n, tested_stats$never_tested_pct),
+    "",
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 1, n), get_value(reasons_stats, Q11_7 == 1, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 2, n), get_value(reasons_stats, Q11_7 == 2, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 3, n), get_value(reasons_stats, Q11_7 == 3, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 4, n), get_value(reasons_stats, Q11_7 == 4, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 5, n), get_value(reasons_stats, Q11_7 == 5, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 6, n), get_value(reasons_stats, Q11_7 == 6, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 7, n), get_value(reasons_stats, Q11_7 == 7, pct)),
+    sprintf("%d (%g)", get_value(reasons_stats, Q11_7 == 8, n), get_value(reasons_stats, Q11_7 == 8, pct))
+  )
+)
+
+kable(table1, col.names = c("Characteristic", "Value"),
+      caption = "Table 1",
+      escape = FALSE)
+```
+
+
+# Primary Analysis
+
+# Data
+
+```{r data, warning=FALSE}
+# Platform data from manuscript Table 2
+platform_data <- tibble(
+  Wave = c(1, 1, 1, 2, 2, 2),
+  Site = c("Facebook", "Grindr", "Google", "Instagram", "Jack'D", "Bing"),
+  Days = c(70, 70, 70, 38, 38, 38),
+  Kits_Ordered = c(13, 9, 17, 13, 125, 0),
+  Rate = Kits_Ordered / Days
+) %>%
+  mutate(Site_f = factor(Site, levels = c("Facebook", "Grindr", "Google", 
+                                           "Instagram", "Jack'D", "Bing")))
+
+kable(platform_data, digits = 2, caption = "Test Kit Orders by Site")
+```
+
+# Poisson Models
+
+```{r models, warning=FALSE}
+# Separate models by wave
+wave1 <- platform_data %>% filter(Wave == 1)
+wave2 <- platform_data %>% filter(Wave == 2)
+
+model_w1 <- glm(Kits_Ordered ~ Site_f + offset(log(Days)), 
+                data = wave1, family = poisson)
+
+model_w2 <- glm(Kits_Ordered ~ Site_f + offset(log(Days)), 
+                data = wave2, family = poisson)
+```
+
+# Estimated Rates
+
+```{r rates, warning=FALSE}
+# Estimated marginal means (rates per day)
+emm_w1 <- emmeans(model_w1, ~ Site_f, offset = log(1), type = "response")
+emm_w2 <- emmeans(model_w2, ~ Site_f, offset = log(1), type = "response")
+
+# Combine results
+rates_w1 <- as.data.frame(summary(emm_w1)) %>% 
+  mutate(Wave = 1) %>%
+  rename(Estimated_Rate = rate)
+
+rates_w2 <- as.data.frame(summary(emm_w2)) %>% 
+  mutate(Wave = 2) %>%
+  rename(Estimated_Rate = rate)
+
+all_rates <- bind_rows(rates_w1, rates_w2) %>%
+  select(Wave, Site_f, Estimated_Rate, SE, asymp.LCL, asymp.UCL)
+
+kable(all_rates, digits = 3, 
+      caption = "Estimated Order Rates (kits/day) with 95% CI")
+```
+
+## Pairwise Comparisons
+
+### Wave 1
+
+```{r wave1-pairs, warning=FALSE}
+# Pairwise comparisons
+pairs_w1 <- pairs(emm_w1, adjust = "none")
+w1_results <- summary(pairs_w1) %>%
+  as.data.frame() %>%
+  mutate(
+    P_unadjusted = round(p.value, 3),
+    P_Hochberg = round(p.adjust(p.value, method = "hochberg"), 3)
+  ) %>%
+  select(contrast, ratio, P_unadjusted, P_Hochberg)
+
+kable(w1_results, digits = 3, 
+      caption = "Wave 1 Pairwise Comparisons")
+```
+
+### Wave 2
+
+```{r wave2-pairs, warning=FALSE}
+# Pairwise comparisons
+pairs_w2 <- pairs(emm_w2, adjust = "none")
+w2_results <- summary(pairs_w2) %>%
+  as.data.frame() %>%
+  mutate(
+    P_unadjusted = round(p.value, 3),
+    P_Hochberg = round(p.adjust(p.value, method = "hochberg"), 3)
+  ) %>%
+  select(contrast, ratio, P_unadjusted, P_Hochberg)
+
+kable(w2_results, digits = 3, 
+      caption = "Wave 2 Pairwise Comparisons")
+```
+
+## Summary Table
+
+```{r summary, warning=FALSE}
+summary_table <- tibble(
+  Wave = rep(c(1, 2), each = 3),
+  Comparison = c(
+    w1_results$contrast[1:3],
+    w2_results$contrast[1:3]
+  ),
+  Replicated_P = c(
+    w1_results$P_Hochberg[1:3],
+    w2_results$P_Hochberg[1:3]
+  ),
+  Reported_P = c(0.59, 0.59, 0.59, "<0.001", 0.002, "<0.001")
+)
+
+kable(summary_table, digits = 3,
+      caption = "Replicated vs Reported P-values (Hochberg-adjusted)")
+```
+
+## Visualization
+
+```{r plot, fig.width=9, fig.height=5, warning=FALSE}
+ggplot(platform_data, aes(x = Site, y = Rate, fill = Site)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = sprintf("%.2f", Rate)), vjust = -0.5) +
+  facet_wrap(~ Wave, scales = "free_x", labeller = label_both) +
+  labs(title = "HIV Self-Test Kit Order Rates",
+       x = "Platform Site",
+       y = "Rate (kits/day)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Secondary Analysis
+
+```{r substance-use}
+# TAPS Scoring: Sum responses where 1=Yes, treat as 1 point
+# Score 0 = None, Score 1 = Problem use, Score 2+ = High Risk
+
+data_taps <- data_clean %>%
+  mutate(
+    # Alcohol: Q13_1 to Q13_4
+    alcohol_score = (ifelse(Q13_1 == 1, 1, 0) + 
+                     ifelse(Q13_2 == 1, 1, 0) + 
+                     ifelse(Q13_3 == 1, 1, 0) + 
+                     ifelse(Q13_4 == 1, 1, 0)),
+    alcohol_cat = case_when(
+      alcohol_score == 0 ~ "None",
+      alcohol_score == 1 ~ "Problem use",
+      alcohol_score >= 2 ~ "High Risk"
+    ),
+    # Cannabis: Q13_5 to Q13_7
+    cannabis_score = (ifelse(Q13_5 == 1, 1, 0) + 
+                      ifelse(Q13_6 == 1, 1, 0) + 
+                      ifelse(Q13_7 == 1, 1, 0)),
+    cannabis_cat = case_when(
+      cannabis_score == 0 ~ "None",
+      cannabis_score == 1 ~ "Problem use",
+      cannabis_score >= 2 ~ "High Risk"
+    ),
+    # Stimulants: Q13_8 to Q13_10
+    stimulants_score = (ifelse(Q13_8 == 1, 1, 0) + 
+                        ifelse(Q13_9 == 1, 1, 0) + 
+                        ifelse(Q13_10 == 1, 1, 0)),
+    stimulants_cat = case_when(
+      stimulants_score == 0 ~ "None",
+      stimulants_score >= 1 ~ "Problem/High Risk"
+    ),
+    # Opioid: Q13_11 to Q13_13 (heroin)
+    opioid_score = (ifelse(Q13_11 == 1, 1, 0) + 
+                    ifelse(Q13_12 == 1, 1, 0) + 
+                    ifelse(Q13_13 == 1, 1, 0)),
+    opioid_cat = case_when(
+      opioid_score == 0 ~ "None",
+      opioid_score >= 1 ~ "Problem/High Risk"
+    ),
+    # Sedative: Q13_17 to Q13_19
+    sedative_score = (ifelse(Q13_17 == 1, 1, 0) + 
+                      ifelse(Q13_18 == 1, 1, 0) + 
+                      ifelse(Q13_19 == 1, 1, 0)),
+    sedative_cat = case_when(
+      sedative_score == 0 ~ "None",
+      sedative_score >= 1 ~ "Problem/High Risk"
+    ),
+    # Prescribed stimulant: Q13_20 to Q13_22
+    prescribed_stim_score = (ifelse(Q13_20 == 1, 1, 0) + 
+                             ifelse(Q13_21 == 1, 1, 0) + 
+                             ifelse(Q13_22 == 1, 1, 0)),
+    prescribed_stim_cat = case_when(
+      prescribed_stim_score == 0 ~ "None",
+      prescribed_stim_score >= 1 ~ "Problem/High Risk"
+    )
+  )
+
+# Test each substance
+results_a <- tibble(
+  Substance = c("Alcohol", "Cannabis", "Stimulants", "Opioid", "Sedative", "Prescribed stimulant"),
+  Category_Var = c("alcohol_cat", "cannabis_cat", "stimulants_cat", 
+                   "opioid_cat", "sedative_cat", "prescribed_stim_cat"),
+  Reported_P = c(0.350, 0.096, 0.299, 1.000, 0.722, 0.727)
+)
+
+# Run Fisher's exact tests with error handling
+results_a <- results_a %>%
+  rowwise() %>%
+  mutate(
+    Replicated_P = tryCatch({
+      tbl <- table(data_taps$ordered, data_taps[[Category_Var]])
+      if (nrow(tbl) >= 2 && ncol(tbl) >= 2) {
+        fisher.test(tbl)$p.value
+      } else {
+        NA
+      }
+    }, error = function(e) NA)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Replicated_P = round(Replicated_P, 3),
+    Difference = ifelse(!is.na(Replicated_P), abs(Replicated_P - Reported_P), NA),
+    Note = ifelse(is.na(Replicated_P), "Insufficient variation", "")
+  )
+```
+
+```{r stage-change}
+# Fisher's exact test - Q15_1
+
+results_b <- tibble(
+  Item = "Stage of change for HIV testing (Q15_1)",
+  Variable = "Q15_1",
+  Reported_P = 0.251
+)
+
+results_b <- results_b %>%
+  mutate(
+    Replicated_P = fisher.test(table(data_clean$ordered, data_clean[[Variable]]))$p.value,
+    Replicated_P = round(Replicated_P, 3),
+    Difference = abs(Replicated_P - Reported_P)
+  )
+```
+
+```{r hiv-testing}
+# Fisher's exact test - Q15_3 through Q15_7 (binary: 1=Agree, 2=Disagree)
+
+results_c <- tibble(
+  Item = c(
+    "Getting tested for HIV helps people feel better",
+    "Getting tested for HIV helps people from getting HIV",
+    "People in my life would leave if I had HIV",
+    "People who tested positive for HIV should hide it",
+    "I would rather not know if I have HIV"
+  ),
+  Variable = paste0("Q15_", c(3, 4, 5, 6, 7)),
+  Reported_P = c(0.160, 0.717, 0.035, 0.825, 0.463)
+)
+
+results_c <- results_c %>%
+  rowwise() %>%
+  mutate(
+    Replicated_P = ifelse(
+      Variable %in% names(data_clean),
+      fisher.test(table(data_clean$ordered, data_clean[[Variable]]))$p.value,
+      NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Replicated_P = round(Replicated_P, 3),
+    Difference = abs(Replicated_P - Reported_P)
+  )
+```
+
+```{r hiv-treatment}
+# Wilcoxon rank-sum test - Q94 series (1-7 scale)
+
+results_d <- tibble(
+  Item = c(
+    "I am less threatened by the idea of being HIV positive",
+    "I am less worried about HIV infection",
+    "I think HIV/AIDS is less of a problem",
+    "I think HIV/AIDS is less serious threat due to treatments",
+    "I am much less concerned about becoming HIV positive",
+    "Condom use less necessary now with treatments",
+    "HIV positive person needs less condom use",
+    "Condom use less needed, can start treatments",
+    "HIV positive using treatments can be cured",
+    "New treatments can eradicate virus from body"
+  ),
+  Variable = c(paste0("Q94_", c(1, 5, 6, 7, 8, 9, 10, 11, 12, 13))),
+  Reported_P = c(0.421, 0.399, 0.413, 0.225, 0.274, 0.971, 0.064, 0.767, 0.199, 0.029)
+)
+
+results_d <- results_d %>%
+  rowwise() %>%
+  mutate(
+    Replicated_P = ifelse(
+      Variable %in% names(data_clean),
+      wilcox.test(as.formula(paste(Variable, "~ ordered")), data = data_clean)$p.value,
+      NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Replicated_P = round(Replicated_P, 3),
+    Difference = abs(Replicated_P - Reported_P)
+  )
+```
+
+```{r hiv-stigma}
+# Wilcoxon rank-sum test - Q14_2 through Q14_5 (7-point Likert)
+
+results_e <- tibble(
+  Item = c(
+    "I feel afraid of people living with HIV/AIDS",
+    "I could not be friends with someone who has HIV/AIDS",
+    "People who get HIV/AIDS through sex/drug use got what they deserve",
+    "I feel anger toward people with HIV/AIDS"
+  ),
+  Variable = paste0("Q14_", 2:5),
+  Reported_P = c(0.613, 0.033, 0.332, 0.213)
+)
+
+results_e <- results_e %>%
+  rowwise() %>%
+  mutate(
+    Replicated_P = ifelse(
+      Variable %in% names(data_clean),
+      wilcox.test(as.formula(paste(Variable, "~ ordered")), data = data_clean)$p.value,
+      NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Replicated_P = round(Replicated_P, 3),
+    Difference = abs(Replicated_P - Reported_P)
+  )
+```
+
+```{r medical-mistrust}
+# Wilcoxon rank-sum test - Q16 series (4-point Likert)
+
+results_f <- tibble(
+  Item = c(
+    "Be cautious with health care organizations",
+    "Patients have been deceived or misled",
+    "Organizations cover up mistakes",
+    "Harmful experiments without knowledge",
+    "Don't always keep information private",
+    "Wonder if organizations know what they're doing",
+    "Mistakes are common in health care"
+  ),
+  Variable = paste0("Q16_", 1:7),
+  Reported_P = c(0.503, 0.413, 0.222, 0.413, 0.371, 0.965, 0.638)
+)
+
+results_f <- results_f %>%
+  rowwise() %>%
+  mutate(
+    Replicated_P = ifelse(
+      Variable %in% names(data_clean),
+      wilcox.test(as.formula(paste(Variable, "~ ordered")), data = data_clean)$p.value,
+      NA
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Replicated_P = round(Replicated_P, 3),
+    Difference = abs(Replicated_P - Reported_P)
+  )
+```
+
+```{r summary-all, warning=FALSE}
+# Combine all testable results
+all_results <- bind_rows(
+  results_a %>% mutate(Domain = "a. Substance Use") %>% select(Domain, Item = Substance, Replicated_P, Reported_P, Difference),
+  results_b %>% mutate(Domain = "b. Stage of Change") %>% select(Domain, Item, Replicated_P, Reported_P, Difference),
+  results_c %>% mutate(Domain = "c. HIV Testing Attitudes") %>% select(Domain, Item, Replicated_P, Reported_P, Difference),
+  results_d %>% mutate(Domain = "d. HIV Treatment Attitudes") %>% select(Domain, Item, Replicated_P, Reported_P, Difference),
+  results_e %>% mutate(Domain = "e. HIV-Related Stigma") %>% select(Domain, Item, Replicated_P, Reported_P, Difference),
+  results_f %>% mutate(Domain = "f. Medical Mistrust") %>% select(Domain, Item, Replicated_P, Reported_P, Difference)
+) %>%
+  filter(!is.na(Replicated_P))
+
+kable(all_results, digits = 3,
+      caption = "Complete Secondary Analysis Results (All Sections a-f)")
+```
+
+
+
+# Reflection
+
+While rates in the primary analysis were consistent, the p-values differed between the ones that I calculated and the reported ones. While wave 1 was consistent in terms of no pairwise comparisions being statistically significant, wave 2 had calculated p-values of 1 for Instagram/Bing and Jack'D/Bing whereas the paper had these pairwise comparisons being statistically significant. 
+
+The secondary analysis was almost completely consistent with the reported p-values. The three statistically significant associations, "People in my life would leave if I had HIV," "I think that new HIV/AIDS treatments can eradicate the virus from your body," and "I could not be friends with someone who has HIV/AIDS" were also statistically significant in my analysis.
+
+# References
+
+## Primary Study
+Stafylis, C., Natoli, L. J., Marano, M., Charest, S., Klausner, J. D., Daskalakis, D., & Halkitis, P. N. (2022). Effectiveness of social media, dating applications, and informational search sites in promoting HIV self-testing among young sexual minority men: A comparative analysis of platform effectiveness. JMIR Formative Research, 6(9), e35648. https://doi.org/10.2196/35648
+
+## Dataset
+National Institute on Drug Abuse. (2023). NIDA Clinical Trials Network: Social Media PrEP Study (CTN-0083) [Data set]. https://datashare.nida.nih.gov/study/nida-ctn-0083
+
+##Eemeans
+Lenth, R. V. (2024). emmeans: Estimated marginal means, aka least-squares means (R package version 1.10.0). https://CRAN.R-project.org/package=emmeans
